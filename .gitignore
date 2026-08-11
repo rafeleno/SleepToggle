@@ -1,0 +1,12 @@
+# Compiled executable
+SleepToggle
+
+# Built macOS application
+SleepToggle.app/
+.build/
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
