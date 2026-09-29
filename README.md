@@ -12,6 +12,21 @@
 Настройка сохраняется между запусками. Кнопка «Отключить» в том же окне удаляет
 назначенное сочетание.
 
+## Ветки и текущая сборка
+
+Текущая ветка: `test/combined-sleep-toggle`. Версия в `Info.plist`: **1.2**.
+
+| Ветка | Версия | Содержание |
+|---|---|---|
+| [`main`](https://github.com/rafeleno/SleepToggle/tree/main) | 1.0 | Исходный постоянный режим |
+| [`fix/macos-sleep-state`](https://github.com/rafeleno/SleepToggle/tree/fix/macos-sleep-state) | 1.1 | Исправление чтения SleepDisabled и сообщений об ошибках |
+| [`feat/one-lid-session`](https://github.com/rafeleno/SleepToggle/tree/feat/one-lid-session) | 1.0 | Один цикл крышки от исходной базы; без исправления чтения |
+| [`test/combined-sleep-toggle`](https://github.com/rafeleno/SleepToggle/tree/test/combined-sleep-toggle) | 1.2 | Объединённая тестовая сборка: исправление и один цикл |
+
+Исходная база кода — коммит `757687c`. Исправление и фича созданы в
+независимых ветках; объединённая ветка содержит оба изменения. Для проверки
+обоих изменений используйте `test/combined-sleep-toggle`.
+
 ## Одно закрытие крышки
 
 Каждое включение (`☕`) действует на один цикл крышки:
@@ -36,6 +51,11 @@
 возникает ошибка прав `pmset`, приложение сообщает об этом и повторяет попытки;
 оно не показывает режим как завершённый до подтверждения изменения.
 
+Сессию нового режима создаёт включение через значок или горячую клавишу.
+Если сон был отключён старой постоянной версией или другой программой,
+после перехода сначала верните `💤`, затем включите `☕` заново: это начнёт
+отдельный цикл крышки. `install.sh` сам не переносит старый постоянный режим.
+
 ## Проверка разработки
 
 ```sh
@@ -51,6 +71,7 @@
 SLEEP_TOGGLE_LIVE_SENSOR_CHECK=1 ./test.sh
 ```
 
+Автоматические проверки не заменяют тест реальной крышки.
 Физический сценарий проверяется отдельно: включение → закрытие → открытие →
 `pmset -g` с `SleepDisabled 0` → следующее закрытие с обычным сном.
 
@@ -71,9 +92,21 @@ YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pm
 sudo visudo -f /etc/sudoers.d/SleepToggle
 ```
 
-Вставьте правило, сохраните файл и выйдите из редактора.(если открылся vim - введи :wq)
-Имя текущего
-пользователя можно узнать командой `whoami`.
+Вставьте правило, сохраните файл и выйдите из редактора. В Vim нажмите
+`Esc`, введите `:wq` и нажмите Enter. `YOUR_USERNAME` замените результатом
+`whoami` (например, `rafeleno`). Затем проверьте права файла и правило:
+
+```sh
+sudo chmod 0440 /etc/sudoers.d/SleepToggle
+sudo visudo -c
+sudo -n -l /usr/bin/pmset -a disablesleep 0
+sudo -n -l /usr/bin/pmset -a disablesleep 1
+```
+
+Проверки `-l` только показывают разрешённые команды и не меняют сон.
+`-n` запрещает интерактивный запрос пароля; `-a` применяет настройку для
+батареи и адаптера питания. `disablesleep 1` отключает сон, `0` возвращает его.
+Скрипт установки не создаёт правило `sudoers` автоматически.
 
 Правило разрешает вашей учётной записи только две команды переключения сна
 от имени `root` без пароля, для всех источников питания (`-a`). Добавляйте его
@@ -92,7 +125,7 @@ sudo visudo -f /etc/sudoers.d/SleepToggle
 - `❔`: не удалось прочитать системные настройки; нажатие показывает ошибку.
 
 На новом Mac `pmset -g` может не выводить строку `SleepDisabled`, пока эту
-настройку не меняли. Версия 1.1 распознаёт это как обычный включённый сон,
+настройку не меняли. Эта сборка распознаёт это как обычный включённый сон,
 если системные настройки успешно прочитаны. Ошибки запуска и неизвестный
 вывод по-прежнему считаются ошибками чтения.
 
@@ -103,10 +136,28 @@ sudo -n -l /usr/bin/pmset -a disablesleep 1
 ```
 
 При ошибке прав приложение показывает сообщение с выводом `sudo`.
-Настройка сна действует на весь Mac и сохраняется после выхода из приложения.
-Чтобы вернуть обычный сон, переключите значок с `☕` на `💤`.
+Настройка сна действует на весь Mac. Обычный выход из приложения завершает
+его активную сессию и возвращает сон. Ручная отмена: переключите `☕` на `💤`.
 
 ## Установка в `/Applications`
+
+Для новой копии репозитория выберите именно эту ветку:
+
+```sh
+git clone --branch test/combined-sleep-toggle https://github.com/rafeleno/SleepToggle.git SleepToggle
+cd SleepToggle
+```
+
+Если репозиторий уже есть, перейдите в его каталог и выберите ветку:
+
+```sh
+git fetch origin
+git switch test/combined-sleep-toggle
+```
+
+Перед переустановкой переведите запущенный SleepToggle в `💤`, затем выберите
+«Выйти из SleepToggle» в меню правого клика.
+
 
 1. Установите инструменты командной строки Xcode, если они ещё не установлены:
 
@@ -147,6 +198,21 @@ two-finger click or right-click the icon, choose “Сменить сочета�
 persists between launches. The “Отключить” (“Disable”) button in the same
 window removes the assigned shortcut.
 
+## Branches and this build
+
+Current branch: `test/combined-sleep-toggle`. Bundle version: **1.2**.
+
+| Branch | Version | Contents |
+|---|---|---|
+| [`main`](https://github.com/rafeleno/SleepToggle/tree/main) | 1.0 | Original persistent mode |
+| [`fix/macos-sleep-state`](https://github.com/rafeleno/SleepToggle/tree/fix/macos-sleep-state) | 1.1 | SleepDisabled parsing fix and visible toggle errors |
+| [`feat/one-lid-session`](https://github.com/rafeleno/SleepToggle/tree/feat/one-lid-session) | 1.0 | One lid cycle from the original base; without the parsing fix |
+| [`test/combined-sleep-toggle`](https://github.com/rafeleno/SleepToggle/tree/test/combined-sleep-toggle) | 1.2 | Combined test build: parsing fix and one lid cycle |
+
+The original code base is commit `757687c`. The fix and feature were created
+as independent branches; the combined branch merges both. For trying both
+changes, use `test/combined-sleep-toggle`.
+
 ## One lid-close cycle
 
 Each activation (`☕`) applies to one lid cycle:
@@ -171,6 +237,11 @@ If the lid sensor is unavailable, the mode is not activated. A `pmset`
 permission failure on reopening displays an error and is retried. The mode is
 only marked complete after the setting change is confirmed.
 
+Activating via the icon or hotkey creates the new session. If sleep was
+already disabled by the old persistent version or another app, switch to
+`💤` first, then activate `☕` again to start a fresh lid cycle. `install.sh`
+does not migrate an old persistent mode automatically.
+
 ## Development checks
 
 ```sh
@@ -186,6 +257,7 @@ To check the actual sensor without changing sleep:
 SLEEP_TOGGLE_LIVE_SENSOR_CHECK=1 ./test.sh
 ```
 
+Automated checks do not replace a real lid test.
 Test the physical scenario separately: activate → close → open → `pmset -g`
 with `SleepDisabled 0` → next close with normal sleep.
 
@@ -206,8 +278,21 @@ with the safe editor instead:
 sudo visudo -f /etc/sudoers.d/SleepToggle
 ```
 
-Paste the rule, save the file, and exit the editor. You can find your current
-username by running `whoami`.
+Paste the rule, save the file, and exit the editor. In Vim, press `Esc`, type
+`:wq`, and press Enter. Replace `YOUR_USERNAME` with the output of `whoami`
+(for example, `rafeleno`). Then validate file permissions and the rule:
+
+```sh
+sudo chmod 0440 /etc/sudoers.d/SleepToggle
+sudo visudo -c
+sudo -n -l /usr/bin/pmset -a disablesleep 0
+sudo -n -l /usr/bin/pmset -a disablesleep 1
+```
+
+The `-l` checks list allowed commands without changing sleep. `-n` prevents
+an interactive password prompt; `-a` applies the setting to battery and AC
+power. `disablesleep 1` disables sleep; `0` restores it. The installation
+script does not create the `sudoers` rule automatically.
 
 This rule allows only the two sleep toggle commands to run as `root` without
 a password, for all power sources (`-a`). Add it only on a personal computer
@@ -226,7 +311,7 @@ alert only once.
 - `❔`: system settings could not be read; clicking shows an error.
 
 On a new Mac, `pmset -g` can omit `SleepDisabled` until the setting has first
-been changed. Version 1.1 recognizes this as normal enabled sleep when the
+been changed. This build recognizes this as normal enabled sleep when the
 system settings were read successfully. Launch failures and unrecognized
 output still count as read errors.
 
@@ -237,10 +322,28 @@ sudo -n -l /usr/bin/pmset -a disablesleep 1
 ```
 
 Permission failures now display an alert with the output from `sudo`.
-The sleep setting applies to the entire Mac and persists after quitting the app.
-To restore normal sleep, toggle the icon from `☕` to `💤`.
+The sleep setting applies to the entire Mac. A normal quit ends the active
+session and restores sleep. To cancel manually, toggle `☕` back to `💤`.
 
 ## Installation in `/Applications`
+
+For a fresh checkout, select this branch:
+
+```sh
+git clone --branch test/combined-sleep-toggle https://github.com/rafeleno/SleepToggle.git SleepToggle
+cd SleepToggle
+```
+
+For an existing checkout, enter its directory and select the branch:
+
+```sh
+git fetch origin
+git switch test/combined-sleep-toggle
+```
+
+Before reinstalling, switch the running SleepToggle to `💤`, then choose
+“Выйти из SleepToggle” (“Quit”) from its right-click menu.
+
 
 1. Install the Xcode Command Line Tools if they are not already installed:
 
