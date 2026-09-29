@@ -15,6 +15,8 @@ application is compiled directly from a single source file with `swiftc`.
 
 - `SleepToggle.swift` contains all runtime code: the application lifecycle,
   status item, state polling, sleep toggling, and global hotkey registration.
+- `IOKitMessages.h` exposes the SDK's clamshell notification macro as a constant
+  Swift can import; it contains no runtime implementation.
 - `Info.plist` contains the app bundle metadata. `LSUIElement = true` hides the
   application from the Dock and the regular application switcher.
 - `build.sh` builds `SleepToggle.app`, copies `Info.plist`, applies an ad-hoc
@@ -24,6 +26,8 @@ application is compiled directly from a single source file with `swiftc`.
 - `uninstall.sh` removes the installed bundle from `/Applications`.
 - `README.md` contains Russian and English user documentation, including the
   `sudoers` setup instructions.
+- `test.sh` runs state-machine checks in `Tests/LidSessionTests.swift` without
+  modifying system sleep settings; an optional live check reads the lid sensor.
 - `.build/` and `SleepToggle.app/` are generated local artifacts and must not
   be committed.
 
@@ -31,7 +35,7 @@ application is compiled directly from a single source file with `swiftc`.
 
 - macOS;
 - Xcode Command Line Tools (`xcrun`, `swiftc`, the macOS SDK, and `codesign`);
-- the system Cocoa and Carbon frameworks;
+- the system Cocoa, Carbon, and IOKit frameworks;
 - `/usr/bin/pmset` and `/usr/bin/sudo` at their standard system paths.
 
 Do not add a third-party package manager or an Xcode project without a clear
@@ -59,8 +63,9 @@ codesign --verify --deep --strict SleepToggle.app
 ./uninstall.sh
 ```
 
-`build.sh` is the primary compilation and packaging check. There are currently
-no automated unit or UI tests. `install.sh` and `uninstall.sh` modify
+`build.sh` is the primary compilation and packaging check. Run `./test.sh` for
+automated lid-session checks. There are no automated UI tests.
+`install.sh` and `uninstall.sh` modify
 `/Applications`, so agents must not run them without an explicit need or a user
 request.
 
@@ -79,7 +84,14 @@ request.
    `sudo -n /usr/bin/pmset -a disablesleep <0|1>`. The `-n` flag prevents an
    interactive password prompt, which would otherwise leave the menu bar
    application waiting for unavailable terminal input.
-5. The Carbon API registers the system-wide `⌃⌥⌘S` shortcut. The hotkey and
+5. `LidStateMonitor` subscribes to `kIOPMMessageClamshellStateChange` on
+   `IOPMrootDomain` using IOKit. The message's bit 0 is the lid state; bit 1
+   describes whether the lid causes sleep and must not advance the cycle.
+   Callbacks run on the main dispatch queue; two-second polling is a fallback.
+6. `LidSession` waits for close, then open, then a confirmed `disablesleep 0`.
+   Its phase is saved in UserDefaults. Failed restoration retains the phase
+   for retries. A normal quit restores sleep and is cancelled on failure.
+7. The Carbon API registers the system-wide `⌃⌥⌘S` shortcut. The hotkey and
    event handler are released when the application terminates.
 
 The application changes the system setting for every power source (`-a`), not
@@ -131,7 +143,8 @@ The minimum checks for every change are:
 
 ```sh
 plutil -lint Info.plist
-zsh -n build.sh install.sh uninstall.sh
+zsh -n build.sh install.sh uninstall.sh test.sh
+./test.sh
 ./build.sh
 ```
 
@@ -144,9 +157,12 @@ For behavior changes, also perform the following manual checks on macOS:
 4. Test toggling by clicking the status item and by pressing the configured shortcut.
 5. Test both transitions (`0 → 1` and `1 → 0`), then restore the original sleep
    setting.
-6. Confirm that behavior is understandable when the required `sudoers` rule is
+6. Test the first close/open cycle, confirm normal sleep is restored, then
+   confirm a subsequent close uses normal macOS sleep rules. Verify that
+   repeated open notifications before the first close do not cancel the mode.
+7. Confirm that behavior is understandable when the required `sudoers` rule is
    absent.
-7. Quit the application and confirm that the global shortcut is released.
+8. Quit the application and confirm that the global shortcut is released.
 
 Only perform manual checks that change the sleep state with the machine owner's
 consent. If the full manual check was not performed, clearly report which parts

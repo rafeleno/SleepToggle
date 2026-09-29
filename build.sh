@@ -42,10 +42,12 @@ export SWIFT_MODULECACHE_PATH="$MODULE_CACHE"
 xcrun swiftc \
     -sdk "$SDK_PATH" \
     -O \
+    -import-objc-header "$SCRIPT_DIR/IOKitMessages.h" \
     "$SCRIPT_DIR/SleepToggle.swift" \
     -o "$STAGED_APP/Contents/MacOS/$APP_NAME" \
     -framework Cocoa \
-    -framework Carbon
+    -framework Carbon \
+    -framework IOKit
 
 /bin/cp "$SCRIPT_DIR/Info.plist" "$STAGED_APP/Contents/Info.plist"
 /usr/bin/codesign --force --sign - "$STAGED_APP"
