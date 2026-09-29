@@ -19,7 +19,7 @@
 имя своей учётной записи macOS:
 
 ```text
-YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset
+YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
 ```
 
 Эту строку нельзя запускать как обычную команду. Откройте отдельный файл
@@ -33,9 +33,30 @@ sudo visudo -f /etc/sudoers.d/SleepToggle
 Имя текущего
 пользователя можно узнать командой `whoami`.
 
-Правило разрешает вашей учётной записи запускать `/usr/bin/pmset` от имени
-`root` без пароля. Добавляйте его только на личном компьютере и только если
-понимаете последствия.
+Правило разрешает вашей учётной записи только две команды переключения сна
+от имени `root` без пароля, для всех источников питания (`-a`). Добавляйте его
+только на личном компьютере и только если понимаете последствия.
+
+## Состояние и диагностика
+
+- `☕`: сон отключён (`SleepDisabled 1`), включая сон при закрытии крышки.
+- `💤`: обычный сон включён (`SleepDisabled 0` или настройка ещё не записана).
+- `❔`: не удалось прочитать системные настройки; нажатие показывает ошибку.
+
+На новом Mac `pmset -g` может не выводить строку `SleepDisabled`, пока эту
+настройку не меняли. Версия 1.1 распознаёт это как обычный включённый сон,
+если системные настройки успешно прочитаны. Ошибки запуска и неизвестный
+вывод по-прежнему считаются ошибками чтения.
+
+После сохранения правила проверьте его, не меняя настройку сна:
+
+```sh
+sudo -n -l /usr/bin/pmset -a disablesleep 1
+```
+
+При ошибке прав приложение показывает сообщение с выводом `sudo`.
+Настройка сна действует на весь Mac и сохраняется после выхода из приложения.
+Чтобы вернуть обычный сон, переключите значок с `☕` на `💤`.
 
 ## Установка в `/Applications`
 
@@ -85,7 +106,7 @@ the sleep settings. Before using it, add the following `sudoers` rule, replacing
 `YOUR_USERNAME` with the name of your macOS user account:
 
 ```text
-YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset
+YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
 ```
 
 Do not run this line as a regular shell command. Open a separate `sudoers` file
@@ -98,9 +119,30 @@ sudo visudo -f /etc/sudoers.d/SleepToggle
 Paste the rule, save the file, and exit the editor. You can find your current
 username by running `whoami`.
 
-This rule allows your user account to run `/usr/bin/pmset` as `root` without a
-password. Add it only on a personal computer and only if you understand the
-security implications.
+This rule allows only the two sleep toggle commands to run as `root` without
+a password, for all power sources (`-a`). Add it only on a personal computer
+and only if you understand the security implications.
+
+## State and diagnostics
+
+- `☕`: sleep is disabled (`SleepDisabled 1`), including sleep on lid close.
+- `💤`: normal sleep is enabled (`SleepDisabled 0` or an unset flag).
+- `❔`: system settings could not be read; clicking shows an error.
+
+On a new Mac, `pmset -g` can omit `SleepDisabled` until the setting has first
+been changed. Version 1.1 recognizes this as normal enabled sleep when the
+system settings were read successfully. Launch failures and unrecognized
+output still count as read errors.
+
+After saving the rule, verify it without changing the sleep setting:
+
+```sh
+sudo -n -l /usr/bin/pmset -a disablesleep 1
+```
+
+Permission failures now display an alert with the output from `sudo`.
+The sleep setting applies to the entire Mac and persists after quitting the app.
+To restore normal sleep, toggle the icon from `☕` to `💤`.
 
 ## Installation in `/Applications`
 

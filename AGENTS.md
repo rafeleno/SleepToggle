@@ -4,7 +4,8 @@
 
 SleepToggle is a small native macOS menu bar application. It displays whether
 sleep is currently disabled and toggles that state when the user clicks the
-status item or presses the global `Control-Option-Command-S` (`⌃⌥⌘S`) shortcut.
+status item or presses their configured global shortcut. No shortcut is assigned
+by default; the selection is saved in UserDefaults.
 
 The project is intentionally minimal: it has no Xcode project, Swift Package
 Manager configuration, third-party dependencies, or test framework. The
@@ -70,7 +71,8 @@ request.
    timer, and registers the global hotkey.
 2. `sleepDisabled()` runs `/usr/bin/pmset -g` and looks for the
    `SleepDisabled` setting. A value of `1` means sleep is disabled; `0` means it
-   is enabled.
+   is enabled. A successfully read system settings header without the key also
+   means normal sleep; unrecognized output remains an error.
 3. `updateIcon()` displays `☕` when sleep is disabled and `💤` when sleep is
    enabled.
 4. `toggleSleep()` runs
@@ -88,7 +90,7 @@ only for battery power or the AC adapter.
 Toggling requires a separate `sudoers` rule, as documented in the README:
 
 ```text
-USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset
+USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset -a disablesleep 0, /usr/bin/pmset -a disablesleep 1
 ```
 
 - Never create or modify `/etc/sudoers` or `/etc/sudoers.d/*` automatically.
@@ -139,7 +141,7 @@ For behavior changes, also perform the following manual checks on macOS:
 2. Confirm that the application does not appear in the Dock and that its status
    item is visible.
 3. Compare the icon and tooltip with the output of `pmset -g`.
-4. Test toggling by clicking the status item and by pressing `⌃⌥⌘S`.
+4. Test toggling by clicking the status item and by pressing the configured shortcut.
 5. Test both transitions (`0 → 1` and `1 → 0`), then restore the original sleep
    setting.
 6. Confirm that behavior is understandable when the required `sudoers` rule is

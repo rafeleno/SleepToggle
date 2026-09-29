@@ -1,6 +1,33 @@
 import Cocoa
 import Carbon
 
+private func parseSleepDisabled(in output: String) -> Bool? {
+    let lines = output.components(separatedBy: .newlines)
+
+    for line in lines {
+        let parts = line.split(whereSeparator: { $0.isWhitespace })
+        guard parts.first == "SleepDisabled" else {
+            continue
+        }
+
+        guard parts.count == 2, parts[1] == "0" || parts[1] == "1" else {
+            return nil
+        }
+        return parts[1] == "1"
+    }
+
+    // pmset prints this header after successfully reading system settings,
+    // but omits SleepDisabled until the setting has first been written.
+    // An unset flag means the system's normal sleep behavior is enabled.
+    if lines.contains(where: {
+        $0.trimmingCharacters(in: .whitespaces) == "System-wide power settings:"
+    }) {
+        return false
+    }
+
+    return nil
+}
+
 private struct HotKey: Equatable {
     let keyCode: UInt32
     let modifiers: UInt32
@@ -303,17 +330,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
         let output = String(data: data, encoding: .utf8) ?? ""
 
-        for line in output.components(separatedBy: .newlines) {
-            if line.contains("SleepDisabled") {
-                let parts = line.split(whereSeparator: { $0.isWhitespace })
-
-                if let value = parts.last, value == "0" || value == "1" {
-                    return value == "1"
-                }
-            }
+        if let disabled = parseSleepDisabled(in: output) {
+            return disabled
         }
 
-        print("pmset не вернул значение SleepDisabled")
+        print("pmset не вернул системные настройки сна")
         return nil
     }
 
@@ -348,6 +369,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleSleep() {
         guard let current = sleepDisabled() else {
+            showSleepError("Не удалось прочитать системные настройки сна через pmset.")
             return
         }
 
@@ -374,13 +396,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? ""
                 print("Ошибка pmset: \(error)")
+                showSleepError(
+                    "Не удалось изменить настройку сна (код \(task.terminationStatus)). "
+                        + "Проверьте правило sudoers для pmset по инструкции README.\n\n"
+                        + error.trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                return
+            }
+
+            guard let updated = sleepDisabled(), updated == !current else {
+                updateIcon()
+                showSleepError("pmset завершился, но изменение настройки сна не подтверждено.")
                 return
             }
 
             updateIcon()
         } catch {
             print("Ошибка запуска sudo/pmset: \(error)")
+            showSleepError("Не удалось запустить sudo/pmset: \(error.localizedDescription)")
         }
+    }
+
+    private func showSleepError(_ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Не удалось переключить спящий режим"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Настройка глобальной горячей клавиши
