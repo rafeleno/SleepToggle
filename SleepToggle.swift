@@ -1,5 +1,104 @@
 import Cocoa
 import Carbon
+import IOKit
+import IOKit.pwr_mgt
+
+private struct LidSession {
+    enum Phase: String {
+        case waitingForClose
+        case waitingForOpen
+        case restoringSleep
+    }
+
+    private(set) var phase: Phase?
+
+    var needsRestore: Bool { phase == .restoringSleep }
+
+    mutating func arm(isClosed: Bool) {
+        phase = isClosed ? .waitingForOpen : .waitingForClose
+    }
+
+    mutating func observe(isClosed: Bool) {
+        if phase == .waitingForClose, isClosed {
+            phase = .waitingForOpen
+        } else if phase == .waitingForOpen, !isClosed {
+            phase = .restoringSleep
+        }
+    }
+
+    mutating func cancel() {
+        phase = nil
+    }
+}
+
+private func lidIsClosed(messageFlags: UInt) -> Bool {
+    messageFlags & UInt(kClamshellStateBit) != 0
+}
+
+private final class LidStateMonitor {
+    var onChange: ((Bool) -> Void)?
+    private var rootDomain: io_service_t = 0
+    private var notification: io_object_t = 0
+    private var port: IONotificationPortRef?
+
+    var isClosed: Bool? {
+        guard rootDomain != 0,
+              let value = IORegistryEntryCreateCFProperty(
+                rootDomain, kAppleClamshellStateKey as CFString,
+                kCFAllocatorDefault, 0
+              )?.takeRetainedValue() else {
+            return nil
+        }
+        return value as? Bool
+    }
+
+    func start() -> Bool {
+        stop()
+        rootDomain = IOServiceGetMatchingService(
+            kIOMainPortDefault, IOServiceMatching("IOPMrootDomain")
+        )
+        guard rootDomain != 0, isClosed != nil,
+              let port = IONotificationPortCreate(kIOMainPortDefault) else {
+            stop()
+            return false
+        }
+        self.port = port
+
+        let callback: IOServiceInterestCallback = { context, _, type, argument in
+            guard type == UInt32(SleepToggleClamshellStateChange),
+                  let context else { return }
+            let monitor = Unmanaged<LidStateMonitor>
+                .fromOpaque(context).takeUnretainedValue()
+            // Capture the message's state, rather than a later registry read:
+            // a fast close/open cycle must retain both ordered transitions.
+            let flags = argument.map { UInt(bitPattern: $0) } ?? 0
+            monitor.onChange?(lidIsClosed(messageFlags: flags))
+        }
+
+        let result = IOServiceAddInterestNotification(
+            port, rootDomain, kIOGeneralInterest, callback,
+            Unmanaged.passUnretained(self).toOpaque(), &notification
+        )
+        guard result == KERN_SUCCESS else {
+            print("Не удалось подключить датчик крышки: \(result)")
+            stop()
+            return false
+        }
+        IONotificationPortSetDispatchQueue(port, DispatchQueue.main)
+        return true
+    }
+
+    func stop() {
+        if notification != 0 { IOObjectRelease(notification) }
+        notification = 0
+        if let port { IONotificationPortDestroy(port) }
+        port = nil
+        if rootDomain != 0 { IOObjectRelease(rootDomain) }
+        rootDomain = 0
+    }
+
+    deinit { stop() }
+}
 
 private struct HotKey: Equatable {
     let keyCode: UInt32
@@ -175,6 +274,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         static let hotKeyCode = "hotKeyCode"
         static let hotKeyModifiers = "hotKeyModifiers"
         static let hotKeyLabel = "hotKeyLabel"
+        static let lidSessionPhase = "lidSessionPhase"
     }
 
     private let hotKeySignature = OSType(0x534C5054) // "SLPT"
@@ -186,10 +286,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var activeHotKey: HotKey?
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
+    private var lidMonitor: LidStateMonitor?
+    private var lidSession = LidSession()
+    private var restoreErrorShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
         configureStatusMenu()
+
+        let monitor = LidStateMonitor()
+        monitor.onChange = { [weak self] closed in
+            self?.handleLidChange(isClosed: closed)
+        }
+        if monitor.start() { lidMonitor = monitor }
+        if let saved = UserDefaults.standard.string(forKey: DefaultsKey.lidSessionPhase) {
+            lidSession = LidSession(phase: LidSession.Phase(rawValue: saved))
+        }
 
         configuredHotKey = loadHotKey()
         if let configuredHotKey, !registerHotKey(configuredHotKey) {
@@ -199,12 +311,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
 
-        updateIcon()
+        pollState()
 
         timer = Timer.scheduledTimer(
             timeInterval: 2,
             target: self,
-            selector: #selector(updateIcon),
+            selector: #selector(pollState),
             userInfo: nil,
             repeats: true
         )
@@ -319,6 +431,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Иконка
 
+    private func saveLidSession() {
+        if let phase = lidSession.phase {
+            UserDefaults.standard.set(phase.rawValue, forKey: DefaultsKey.lidSessionPhase)
+        } else {
+            UserDefaults.standard.removeObject(forKey: DefaultsKey.lidSessionPhase)
+        }
+    }
+
+    private func cancelLidSession() {
+        guard lidSession.phase != nil else { return }
+        lidSession.cancel()
+        restoreErrorShown = false
+        saveLidSession()
+    }
+
+    private func handleLidChange(isClosed: Bool) {
+        let previous = lidSession.phase
+        lidSession.observe(isClosed: isClosed)
+        if lidSession.phase != previous { saveLidSession() }
+        restoreSleepIfNeeded()
+        updateIcon()
+    }
+
+    @objc private func pollState() {
+        // Reconcile external pmset changes before retrying a failed restore.
+        if sleepDisabled() == false { cancelLidSession() }
+        if let closed = lidMonitor?.isClosed {
+            handleLidChange(isClosed: closed)
+        } else {
+            restoreSleepIfNeeded()
+            updateIcon()
+        }
+    }
+
+    private func restoreSleepIfNeeded() {
+        guard lidSession.needsRestore else { return }
+        if setSleepDisabled(false) {
+            cancelLidSession()
+        } else if !restoreErrorShown {
+            restoreErrorShown = true
+            showSessionError(
+                "Крышка открыта, но вернуть обычный сон не удалось. "
+                    + "Проверьте правило sudoers для pmset. "
+                    + "SleepToggle продолжит попытки восстановления."
+            )
+        }
+    }
+
     @objc private func updateIcon() {
         guard let sleepIsDisabled = sleepDisabled() else {
             statusItem.button?.title = "❔"
@@ -329,9 +489,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem.button?.title = sleepIsDisabled ? "☕" : "💤"
 
-        let state = sleepIsDisabled
+        if !sleepIsDisabled { cancelLidSession() }
+
+        var state = sleepIsDisabled
             ? "Спящий режим отключён"
             : "Спящий режим включён"
+
+        switch lidSession.phase {
+        case .waitingForClose:
+            state += " до первого закрытия и открытия крышки"
+        case .waitingForOpen:
+            state += " до открытия крышки"
+        case .restoringSleep:
+            state += " — повторная попытка восстановления"
+        case nil:
+            break
+        }
 
         if let activeHotKey {
             statusItem.button?.toolTip =
@@ -351,7 +524,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        let newValue = current ? "0" : "1"
+        if current {
+            if setSleepDisabled(false) { cancelLidSession() }
+        } else {
+            guard let closed = lidMonitor?.isClosed else {
+                showSessionError("Датчик крышки недоступен. Режим до открытия крышки не включён.")
+                return
+            }
+            if setSleepDisabled(true) {
+                lidSession.arm(isClosed: closed)
+                restoreErrorShown = false
+                saveLidSession()
+            }
+        }
+        updateIcon()
+    }
+
+    @discardableResult
+    private func setSleepDisabled(_ disabled: Bool) -> Bool {
+        let newValue = disabled ? "1" : "0"
         let task = Process()
 
         task.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
@@ -374,13 +565,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
                 let error = String(data: data, encoding: .utf8) ?? ""
                 print("Ошибка pmset: \(error)")
-                return
+                return false
             }
 
-            updateIcon()
+            return sleepDisabled() == disabled
         } catch {
             print("Ошибка запуска sudo/pmset: \(error)")
+            return false
         }
+    }
+
+    private func showSessionError(_ message: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Режим до открытия крышки"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     // MARK: - Настройка глобальной горячей клавиши
@@ -604,8 +806,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.runModal()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard lidSession.phase != nil else { return .terminateNow }
+        guard setSleepDisabled(false) else {
+            showSessionError("Не удалось вернуть обычный сон. Проверьте права pmset перед выходом.")
+            return .terminateCancel
+        }
+        cancelLidSession()
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         timer?.invalidate()
+        lidMonitor?.stop()
         unregisterHotKey()
 
         if let eventHandlerRef {
